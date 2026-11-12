@@ -30,6 +30,16 @@
     };
     this.setValue = function (v) { return this.set([[v]]); };
     this.setValues = function (v) { return this.set(v); };
+    this.clearContent = function () {
+      var blank = [];
+      for (var i = 0; i < nr; i++) { blank.push([]); for (var j = 0; j < nc; j++) blank[i].push(''); }
+      this.set(blank);
+      // 실제 시트처럼 뒤쪽 빈 줄은 getDataRange에 잡히지 않게 정리
+      var rows = data[name];
+      while (rows.length && rows[rows.length - 1].every(function (x) { return x === '' || x === undefined; })) rows.pop();
+      save();
+      return this;
+    };
     this.setNumberFormat = function () { return this; };
   }
 
@@ -49,7 +59,27 @@
   };
 
   global.SpreadsheetApp = { getActiveSpreadsheet: function () { return ss; }, flush: function () {} };
-  global.LockService = { getScriptLock: function () { return { waitLock: function () {}, releaseLock: function () {} }; } };
+  var dummyLock = { waitLock: function () {}, tryLock: function () { return true; }, releaseLock: function () {} };
+  global.LockService = {
+    getScriptLock: function () { return dummyLock; },
+    getDocumentLock: function () { return dummyLock; }
+  };
+
+  // 스크립트 속성 (localStorage에 저장)
+  var PROP_KEY = 'prizeRoulette.mockProps';
+  var props = {};
+  try { props = JSON.parse(localStorage.getItem(PROP_KEY)) || {}; } catch (e) {}
+  function saveProps() { try { localStorage.setItem(PROP_KEY, JSON.stringify(props)); } catch (e) {} }
+  var scriptProps = {
+    getProperty: function (k) { return Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null; },
+    setProperty: function (k, v) { props[k] = String(v); saveProps(); return this; },
+    setProperties: function (o) { for (var k in o) props[k] = String(o[k]); saveProps(); return this; },
+    deleteProperty: function (k) { delete props[k]; saveProps(); return this; },
+    getKeys: function () { return Object.keys(props); }
+  };
+  global.PropertiesService = { getScriptProperties: function () { return scriptProps; } };
+  // 캐시는 시험에서 설정 변경이 바로 보이게 항상 비어 있는 것으로 둔다
+  global.CacheService = { getScriptCache: function () { return { get: function () { return null; }, put: function () {} }; } };
   global.ContentService = {
     MimeType: { JSON: 'json' },
     createTextOutput: function (t) { return { text: t, setMimeType: function () { return this; } }; }
@@ -77,8 +107,9 @@
     data['설정'].forEach(function (r) { if (r[0] === '관리자 코드' && !r[1]) r[1] = 'TEST-ADMIN'; });
     save();
   };
-  global.mockReset = function () { data = {}; save(); };
+  global.mockReset = function () { data = {}; save(); props = {}; saveProps(); };
   global.mockData = function () { return data; };
+  global.mockProps = function () { return props; };
   global.mockCall = function (req) {
     return JSON.parse(global.doPost({ postData: { contents: JSON.stringify(req) } }).text);
   };

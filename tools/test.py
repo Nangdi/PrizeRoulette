@@ -102,6 +102,51 @@ def logic_tests(browser, base):
     check(res["bad"]["error"] == "bad_request", "잘못된 기기키 → 거절")
     check(res["notDay"]["reason"] == "not_event_day", "재고 탭에 오늘 날짜 없음 → 운영일 아님")
 
+    print("[로직] 빠른 저장소 구조 (예전 기록 이어받기 · 재고 적용 · 오늘 초기화)")
+    res = page.evaluate(
+        """() => {
+        mockReset(); mockInit([1, 1, 1, 5]);
+        const today = todayStr();
+        // 예전 버전이 남긴 오늘 기록 2줄 + 다른 날 기록 1줄 (속성 없음)
+        mockData()['기록'].push([1, today, '10:00:00', 'dev-old-0001', 4, ''], [2, today, '10:01:00', 'dev-old-0002', 3, '10:05:00'],
+                               [1, '2026-01-01', '09:00:00', 'dev-other-day', 1, '']);
+        const out = {};
+        out.oldStatus = mockCall({ action: 'status', deviceKey: 'dev-old-0002' });
+        out.oldSpin = mockCall({ action: 'spin', deviceKey: 'dev-old-0001' });
+        out.newSpin = mockCall({ action: 'spin', deviceKey: 'dev-new-0001' });
+        out.claim = mockCall({ action: 'claim', deviceKey: 'dev-new-0001', pin: '0000' });
+        out.claimRow = mockData()['기록'].find(r => r[3] === 'dev-new-0001').slice();
+        out.claimAgain = mockCall({ action: 'status', deviceKey: 'dev-new-0001' });
+        // 운영자가 재고 탭을 손으로 고친 뒤 메뉴로 적용
+        const row = mockData()['재고'].find(r => r[0] === today);
+        row[1] = 0; row[2] = 0; row[3] = 0; row[4] = 3;
+        out.applied = applyStockFromSheet(today);
+        out.afterApply = [];
+        for (let i = 0; i < 4; i++) out.afterApply.push(mockCall({ action: 'spin', deviceKey: 'dev-apply-' + String(i).padStart(4, '0') }));
+        out.stockShown = mockData()['재고'].find(r => r[0] === today).slice(1);
+        // 오늘 시험 데이터 초기화
+        row[1] = 1; row[2] = 0; row[3] = 0; row[4] = 0;
+        out.removed = resetToday(today);
+        out.logAfterReset = mockData()['기록'].slice(1).map(r => r[1]);
+        out.propsLeft = Object.keys(mockProps()).filter(k => k.includes(today)).length;
+        out.afterReset = mockCall({ action: 'spin', deviceKey: 'dev-old-0001' });
+        return out;
+      }"""
+    )
+    check(res["oldStatus"]["state"] == "result" and res["oldStatus"]["claimedAt"] == "10:05:00", "속성 없는 예전 기록 → 기록 탭에서 결과 찾음")
+    check(res["oldSpin"]["again"] is True and res["oldSpin"]["no"] == 1, "예전 기록 있는 기기 spin → 새로 안 뽑음")
+    check(res["newSpin"]["no"] == 3 and res["newSpin"]["again"] is False, f"새 기기 참여번호는 예전 기록 다음 번호 ({res['newSpin']['no']})")
+    check(bool(res["claim"]["claimedAt"]) and res["claimRow"][5] == res["claim"]["claimedAt"], "수령 → 속성과 기록 탭 수령시각 모두 기록")
+    check(res["claimAgain"]["claimedAt"] == res["claim"]["claimedAt"], "수령 후 다시 열어도 수령시각 유지")
+    check(res["applied"] == [0, 0, 0, 3], "메뉴 '재고 적용' → 재고 탭 숫자가 남은 수량이 됨")
+    ranks = [r.get("rank") for r in res["afterApply"]]
+    check(ranks[:3] == [4, 4, 4] and res["afterApply"][3].get("reason") == "sold_out", f"적용 후 4등 3개만 나오고 마감 {ranks}")
+    check(res["stockShown"] == [0, 0, 0, 0], f"재고 탭 표시도 남은 수량으로 갱신 {res['stockShown']}")
+    check(res["removed"] == 6 and res["logAfterReset"] == ["2026-01-01"] and res["propsLeft"] == 0,
+          f"메뉴 '오늘 초기화' → 오늘 기록 {res['removed']}줄·속성 삭제, 다른 날 기록은 유지")
+    check(res["afterReset"]["no"] == 1 and res["afterReset"]["rank"] == 1 and not res["afterReset"]["again"],
+          "초기화 후 같은 기기도 새로 참여, 참여번호 1부터, 재고 탭 숫자로 시작")
+
     print("[로직] 관리자 모드")
     res = page.evaluate(
         """() => {
@@ -156,6 +201,18 @@ def shot(page, name):
 
 
 def ui_tests(pw, browser, base):
+    print("[화면] 응답이 늦을 때")
+    slow = browser.new_page(viewport={"width": 390, "height": 844})
+    slow.add_init_script("window.__extraDelay = 8000")
+    slow.goto(base + "/index.html?mock=1&reset=1")
+    slow.wait_for_selector("#v-wheel:not(.hidden)", timeout=20000)
+    slow.click("#btn-spin")
+    slow.wait_for_timeout(6800)
+    check("기다리는 중" in slow.text_content("#wheel-note"), "응답 6초 넘으면 '기다리는 중' 안내")
+    slow.wait_for_selector("#v-result:not(.hidden)", timeout=20000)
+    check("1인 1회" in slow.text_content("#wheel-note"), "응답 오면 안내 원래대로")
+    slow.close()
+
     print("[화면] 룰렛 · 결과 · 다시 보기 · 수령 · 마감")
     phone = pw.devices["iPhone 13"]
     ctx = browser.new_context(**{k: v for k, v in phone.items() if k != "default_browser_type"})

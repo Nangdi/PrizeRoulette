@@ -48,6 +48,18 @@ function handle(req) {
   var deviceKey = String(req.deviceKey || '');
   if (!/^[A-Za-z0-9-]{8,64}$/.test(deviceKey)) return { ok: false, error: 'bad_request' };
 
+  // 관리자 모드: 설정 탭의 "관리자 코드"와 같은 코드를 보낸 브라우저.
+  // 횟수 제한 없이 돌릴 수 있고, 재고·기록 탭은 바꾸지 않는다(행사 중 디버그해도 수량에 영향 없음).
+  if (req.admin) {
+    var adminCode = readSettings().adminCode;
+    if (adminCode && String(req.admin) === adminCode) return handleAdmin(req);
+    if (req.action === 'status') {
+      var res = statusOf(deviceKey);
+      res.adminInvalid = true; // 화면에 "관리자 코드가 맞지 않습니다" 표시
+      return res;
+    }
+  }
+
   if (req.action === 'status') return statusOf(deviceKey);
   if (req.action === 'spin') return withLock(function () { return spin(deviceKey); });
   if (req.action === 'claim') return withLock(function () { return claim(deviceKey, String(req.pin || '')); });
@@ -123,6 +135,29 @@ function claim(deviceKey, pin) {
 }
 
 /**
+ * 관리자 요청. 오늘 재고 비율로 뽑되(없거나 0이면 기본 10/40/150/500) 재고·기록은 바꾸지 않는다.
+ */
+function handleAdmin(req) {
+  var settings = readSettings();
+  if (req.action === 'status') return { ok: true, state: 'ready', admin: true };
+  if (req.action === 'claim') {
+    if (!settings.pin || String(req.pin || '') !== settings.pin) return { ok: false, error: 'wrong_pin' };
+    return { ok: true, state: 'claimed', admin: true, claimedAt: nowTimeStr() };
+  }
+  if (req.action === 'spin') {
+    var stock = readStock(todayStr());
+    var remain = stock && sum(stock.remain) > 0 ? stock.remain : [10, 40, 150, 500];
+    var rank = drawRank(remain, Math.random());
+    return {
+      ok: true, state: 'result', again: false, admin: true,
+      no: 0, date: todayStr(), time: nowTimeStr(),
+      rank: rank, prize: settings.prizes[rank - 1] || '', claimedAt: ''
+    };
+  }
+  return { ok: false, error: 'bad_request' };
+}
+
+/**
  * 남은 수량 비율로 등수를 뽑는다. (1등 확률 = 남은 1등 / 남은 전체)
  * 하루 동안 모든 재고를 다 쓰면 등수별 수량이 정확히 설정값과 같아진다.
  * r: 0 이상 1 미만 난수. 재고가 없으면 0.
@@ -168,6 +203,7 @@ function readSettings() {
   for (var i = 1; i < values.length; i++) map[String(values[i][0]).trim()] = String(values[i][1]).trim();
   return {
     pin: map['수령 PIN'] || '',
+    adminCode: map['관리자 코드'] || '',
     prizes: RANKS.map(function (r) { return map[r + '등 경품'] || ''; })
   };
 }
@@ -219,20 +255,27 @@ function cellStr(v, fmt) {
 
 /**
  * 시트 탭 3개를 만들고 기본값을 넣는다. 이미 있는 탭은 건드리지 않는다.
+ * 설정 탭은 이미 있어도 빠진 항목(새 버전에서 추가된 항목)만 아래에 덧붙인다.
  * 날짜·시각이 Date로 바뀌지 않게 모든 칸을 텍스트 서식으로 둔다.
  */
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.setSpreadsheetTimeZone(TZ);
 
-  makeSheet(ss, SHEET_SETTINGS, [
+  var settingRows = [
     ['항목', '값'],
     ['수령 PIN', '0000'],
     ['1등 경품', '1등 경품'],
     ['2등 경품', '2등 경품'],
     ['3등 경품', '3등 경품'],
-    ['4등 경품', '과학관 입장권 + 키링']
-  ]);
+    ['4등 경품', '과학관 입장권 + 키링'],
+    ['관리자 코드', ''] // 비워 두면 관리자 모드 사용 안 함
+  ];
+  if (!makeSheet(ss, SHEET_SETTINGS, settingRows)) {
+    var sh = ss.getSheetByName(SHEET_SETTINGS);
+    var have = sh.getDataRange().getValues().map(function (r) { return String(r[0]).trim(); });
+    settingRows.forEach(function (r) { if (have.indexOf(r[0]) < 0) sh.appendRow(r); });
+  }
   makeSheet(ss, SHEET_STOCK, [
     ['날짜', '1등', '2등', '3등', '4등'],
     ['2026-11-24', 10, 40, 150, 500],
@@ -244,10 +287,12 @@ function setup() {
   ]);
 }
 
+// 새로 만들었으면 true, 이미 있으면 false
 function makeSheet(ss, name, rows) {
-  if (ss.getSheetByName(name)) return;
+  if (ss.getSheetByName(name)) return false;
   var sh = ss.insertSheet(name);
   sh.getRange(1, 1, 1000, rows[0].length).setNumberFormat('@');
   sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
   sh.setFrozenRows(1);
+  return true;
 }

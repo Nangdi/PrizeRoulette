@@ -101,6 +101,42 @@ def logic_tests(browser, base):
     check(res["twice"]["claimedAt"] == res["right"]["claimedAt"], "두 번째 수령 → 처음 수령시각 유지(중복 기록 없음)")
     check(res["bad"]["error"] == "bad_request", "잘못된 기기키 → 거절")
     check(res["notDay"]["reason"] == "not_event_day", "재고 탭에 오늘 날짜 없음 → 운영일 아님")
+
+    print("[로직] 관리자 모드")
+    res = page.evaluate(
+        """() => {
+        mockReset(); mockInit([1, 0, 0, 0]);
+        const stockRows = mockData()['재고'].length;
+        const A = { deviceKey: 'dev-admin-1', admin: 'TEST-ADMIN' };
+        const spins = [];
+        for (let i = 0; i < 5; i++) spins.push(mockCall({ action: 'spin', ...A }));
+        const out = {
+          spins,
+          status: mockCall({ action: 'status', ...A }),
+          stockRow: mockData()['재고'].find(r => r[0] === todayStr()).slice(),
+          logRows: mockData()['기록'].length - 1,
+          wrongPin: mockCall({ action: 'claim', ...A, pin: '9' }),
+          claim: mockCall({ action: 'claim', ...A, pin: '0000' }),
+          bad: mockCall({ action: 'status', deviceKey: 'dev-admin-2', admin: 'WRONG' }),
+          badSpin: mockCall({ action: 'spin', deviceKey: 'dev-admin-2', admin: 'WRONG' }),
+        };
+        // 관리자 코드 줄이 없는 예전 설정 탭에 setup()을 다시 돌리면 줄이 덧붙는지
+        const s = mockData()['설정'];
+        s.splice(s.findIndex(r => r[0] === '관리자 코드'), 1);
+        setup();
+        out.reAdded = mockData()['설정'].filter(r => r[0] === '관리자 코드').length;
+        out.stockAfterSetup = mockData()['재고'].length === stockRows;
+        return out;
+      }"""
+    )
+    check(all(s["state"] == "result" and s["admin"] and s["rank"] == 1 for s in res["spins"]), "관리자는 같은 기기로 5번 연속 새로 돌림")
+    check(res["status"]["state"] == "ready" and res["status"]["admin"], "관리자 status → 항상 돌릴 수 있음")
+    check(res["stockRow"][1:] == [1, 0, 0, 0] and res["logRows"] == 0, f"관리자 추첨은 재고·기록 안 바뀜 (재고 {res['stockRow'][1:]}, 기록 {res['logRows']}줄)")
+    check(res["wrongPin"]["error"] == "wrong_pin" and res["claim"]["state"] == "claimed", "관리자 수령 확인도 PIN 검사")
+    check(res["bad"].get("adminInvalid") is True and not res["bad"].get("admin"), "틀린 관리자 코드 → 일반 참여 + 코드 오류 표시")
+    check(res["badSpin"]["state"] == "result" and not res["badSpin"].get("admin") and res["badSpin"]["no"] == 1,
+          "틀린 관리자 코드로 돌리면 일반 참여로 기록")
+    check(res["reAdded"] == 1 and res["stockAfterSetup"] is True, "setup() 재실행 → 빠진 '관리자 코드' 줄만 추가, 다른 탭은 그대로")
     page.close()
 
 
@@ -134,7 +170,17 @@ def ui_tests(pw, browser, base):
 
     page.click("#btn-spin")
     check(page.is_disabled("#btn-spin"), "돌리는 중 버튼 잠김")
-    page.wait_for_timeout(1500)
+    # 돌아가는 동안 룰렛 중심이 틀 중심에서 벗어나지 않는지(회전 기준점 확인)
+    offsets = []
+    for _ in range(12):
+        page.wait_for_timeout(150)
+        offsets.append(page.evaluate(
+            """() => { const a = document.getElementById('wheel').getBoundingClientRect();
+                       const b = document.querySelector('.wheel-box').getBoundingClientRect();
+                       return Math.hypot((a.x + a.width / 2) - (b.x + b.width / 2), (a.y + a.height / 2) - (b.y + b.height / 2)); }"""))
+    check(max(offsets) < 3, f"회전 중 룰렛 중심 고정 (최대 어긋남 {max(offsets):.1f}px)")
+    over = page.evaluate("document.documentElement.scrollWidth - window.innerWidth")
+    check(over <= 0, f"회전 중 가로 스크롤 없음 (넘침 {over}px)")
     shot(page, "2_spinning")
     page.wait_for_selector("#v-result:not(.hidden)", timeout=15000)
     rank = int(page.text_content("#r-rank").replace("등", ""))
@@ -196,6 +242,39 @@ def ui_tests(pw, browser, base):
     p.goto(base + "/index.html")
     p.wait_for_selector("#v-message:not(.hidden)")
     check(p.is_visible("#btn-retry"), "서버 연결 실패 → 오류 화면 + 다시 시도 버튼")
+    ctx.close()
+
+    # 관리자 모드 화면
+    ctx = browser.new_context(**{k: v for k, v in phone.items() if k != "default_browser_type"})
+    p = ctx.new_page()
+    p.on("pageerror", lambda e: errors.append(str(e)))
+    p.goto(base + "/index.html?mock=1&reset=1&admin=TEST-ADMIN")
+    p.wait_for_selector("#v-wheel:not(.hidden)")
+    check(p.is_visible("#admin-badge") and "관리자 모드" in p.text_content("#admin-badge"), "?admin=코드 → 관리자 모드 표시")
+    check("admin" not in p.url, f"주소창에서 관리자 코드 지움 ({p.url.split('/')[-1]})")
+    ranks = []
+    for i in range(3):
+        p.click("#btn-spin")
+        p.wait_for_selector("#v-result:not(.hidden)", timeout=15000)
+        ranks.append(p.text_content("#r-rank"))
+        if i == 0:
+            check("TEST" in p.text_content("#r-no") and p.is_visible("#btn-admin-again"), "관리자 결과 → 참여번호 TEST, 다시 돌리기 버튼")
+            p.click("#btn-claim-open"); p.fill("#pin", "0000"); p.click("#btn-claim")
+            p.wait_for_selector("#r-stamp:not(.hidden)")
+            check(True, "관리자 결과도 PIN 수령 확인 → 도장")
+            shot(p, "8_admin_result")
+        p.click("#btn-admin-again")
+        p.wait_for_selector("#v-wheel:not(.hidden)")
+    check(len(ranks) == 3, f"관리자 3회 연속 돌리기 {ranks}")
+    p.goto(base + "/index.html?mock=1")
+    p.wait_for_selector("#v-wheel:not(.hidden)")
+    check(p.is_visible("#admin-badge"), "다시 열어도 관리자 모드 유지(코드 저장됨)")
+    p.goto(base + "/index.html?mock=1&admin=off")
+    p.wait_for_selector("#v-wheel:not(.hidden), #v-result:not(.hidden)")
+    check(p.is_hidden("#admin-badge"), "?admin=off → 관리자 모드 해제")
+    p.goto(base + "/index.html?mock=1&admin=WRONG")
+    p.wait_for_selector("#v-wheel:not(.hidden), #v-result:not(.hidden)")
+    check("맞지 않습니다" in p.text_content("#admin-badge"), "틀린 관리자 코드 → 오류 표시")
     ctx.close()
 
     check(not errors, f"페이지 스크립트 오류 없음 {errors if errors else ''}")

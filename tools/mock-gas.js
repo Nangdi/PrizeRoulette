@@ -73,6 +73,9 @@
     var rows = data['재고'];
     var exists = rows.some(function (r) { return r[0] === today; });
     if (!exists) { rows.push([today].concat(stockToday || [10, 40, 150, 500])); save(); }
+    // 시험용 관리자 코드 (실제 시트에서는 설정 탭에 직접 정함)
+    data['설정'].forEach(function (r) { if (r[0] === '관리자 코드' && !r[1]) r[1] = 'TEST-ADMIN'; });
+    save();
   };
   global.mockReset = function () { data = {}; save(); };
   global.mockData = function () { return data; };

@@ -147,6 +147,43 @@ def logic_tests(browser, base):
     check(res["afterReset"]["no"] == 1 and res["afterReset"]["rank"] == 1 and not res["afterReset"]["again"],
           "초기화 후 같은 기기도 새로 참여, 참여번호 1부터, 재고 탭 숫자로 시작")
 
+    print("[로직] 기록 탭 (3일 × 700건 · 번호 자리 · 복구)")
+    res = page.evaluate(
+        """() => {
+        mockReset(); mockInit([10, 40, 150, 500]);
+        const realToday = window.todayStr;
+        const days = ['2026-11-24', '2026-11-28', '2026-11-29'];
+        const out = { days: [] };
+        days.forEach((d, di) => {
+          window.todayStr = () => d;
+          for (let i = 0; i < 700; i++) mockCall({ action: 'spin', deviceKey: 'dev-' + di + '-' + String(i).padStart(6, '0') });
+          out.days.push(statsOf(d));
+        });
+        // 둘째 날 기록 몇 줄을 지워(쓰기 실패 흉내) 점검 → 복구
+        window.todayStr = () => '2026-11-28';
+        const log = mockData()['기록'];
+        let wiped = 0;
+        for (let i = 1; i < log.length && wiped < 3; i++) if (log[i][1] === '2026-11-28' && log[i][0] % 100 === 0) { log[i] = ['', '', '', '', '', '']; wiped++; }
+        out.beforeFix = statsOf('2026-11-28');
+        out.rebuilt = rebuildLog('2026-11-28');
+        out.afterFix = statsOf('2026-11-28');
+        out.otherDays = [statsOf('2026-11-24').sheetRows, statsOf('2026-11-29').sheetRows];
+        out.logLen = mockData()['기록'].length - 1;
+        window.todayStr = realToday;
+        return out;
+      }"""
+    )
+    for d in res["days"]:
+        check(d["records"] == 700 and d["byRank"] == [10, 40, 150, 500] and d["sheetRows"] == 700
+              and d["missingInSheet"] == 0 and d["sheetOutOfOrder"] == 0 and d["sheetDup"] == 0
+              and d["stockTab"] == [0, 0, 0, 0],
+              f"{d['date']}: 서버 {d['records']}건 {d['byRank']}, 기록 탭 {d['sheetRows']}줄, 빠짐 {d['missingInSheet']}, 순서 어긋남 {d['sheetOutOfOrder']}, 재고 탭 {d['stockTab']}")
+    check(res["logLen"] == 2100, f"기록 탭 2100줄 (기본 1000줄 넘어도 줄 늘려서 씀) → {res['logLen']}")
+    check(res["beforeFix"]["missingInSheet"] == 3, f"기록 줄 3개 지우면 점검에서 빠진 번호로 잡힘 {res['beforeFix']['missingNos']}")
+    check(res["rebuilt"] == 700 and res["afterFix"]["missingInSheet"] == 0 and res["afterFix"]["sheetOutOfOrder"] == 0,
+          "메뉴 '기록 탭 다시 맞추기' → 700줄 복구, 번호순")
+    check(res["otherDays"] == [700, 700], f"복구해도 다른 날 기록은 그대로 {res['otherDays']}")
+
     print("[로직] 관리자 모드")
     res = page.evaluate(
         """() => {

@@ -115,14 +115,43 @@ function spin(deviceKey, settings) {
   if (out.closed) return { ok: true, state: 'closed', reason: out.closed };
   if (out.again) return resultOf(today, out.rec, true, settings);
 
-  // ── 잠금 밖: 시트에 기록 (참여번호를 이미 받았으므로 겹치지 않음) ──
-  try {
-    sheet(SHEET_LOG).appendRow([out.rec.no, today, out.rec.time, deviceKey, out.rec.rank, '']);
-  } catch (err) {
-    console.error('기록 탭 쓰기 실패', out.rec, err); // 결과는 속성에 남아 있음
-  }
+  // ── 잠금 밖: 시트에 기록 ──
+  writeLogRow(today, out.base, out.rec, deviceKey);
   refreshStockDisplay(today);
   return resultOf(today, out.rec, false, settings);
+}
+
+/**
+ * 기록 탭에 한 줄 쓴다. 줄 위치는 참여번호로 정해져 있어서(기준 줄 + 참여번호)
+ * 동시에 여러 요청이 써도 서로 덮어쓰지 않고 번호순으로 놓인다.
+ * 구글 쪽 일시 오류에 대비해 3번까지 다시 시도한다. 그래도 실패하면 결과는 스크립트 속성에 남아 있으므로
+ * 시트 메뉴 "기록 탭 다시 맞추기"로 복구할 수 있다.
+ */
+function writeLogRow(today, base, rec, deviceKey) {
+  var row = [rec.no, today, rec.time, deviceKey, rec.rank, rec.c || ''];
+  for (var attempt = 0; attempt < 3; attempt++) {
+    try {
+      var sh = sheet(SHEET_LOG);
+      if (attempt > 0) ensureLogRows(sh, base + rec.no + 50); // 줄이 모자라 실패했을 수도 있음
+      sh.getRange(base + rec.no, 1, 1, row.length).setValues([row]);
+      return true;
+    } catch (err) {
+      console.error('기록 탭 쓰기 실패 ' + (attempt + 1) + '회', rec, err);
+      Utilities.sleep(300 * (attempt + 1));
+    }
+  }
+  return false;
+}
+
+/**
+ * 기록 탭 줄 수를 needRow 이상으로 늘린다. 정해진 줄에 직접 쓰므로(appendRow와 달리 자동으로 안 늘어남) 필요하다.
+ * 늘린 줄도 텍스트 서식으로 둬서 날짜·시각이 Date로 바뀌지 않게 한다.
+ */
+function ensureLogRows(sh, needRow) {
+  var max = sh.getMaxRows();
+  if (max >= needRow) return;
+  sh.insertRowsAfter(max, needRow - max);
+  sh.getRange(max + 1, 1, needRow - max, 6).setNumberFormat('@');
 }
 
 /**
@@ -142,14 +171,23 @@ function drawLocked(today, deviceKey) {
   if (!rank) return { closed: 'sold_out' };
 
   remain[rank - 1] -= 1;
-  var no = Number(props.getProperty('N|' + today) || 0) + 1;
+  var prevNo = Number(props.getProperty('N|' + today) || 0);
+  var no = prevNo + 1;
   var rec = { no: no, time: nowTimeStr(), rank: rank, c: '' };
   var write = {};
   write['S|' + today] = JSON.stringify(remain);
   write['N|' + today] = String(no);
   write[devKey(today, deviceKey)] = JSON.stringify(rec);
+
+  // 기록 탭 기준 줄: 참여번호 n은 (기준 + n)번째 줄에 쓴다. 없으면(예전 버전에서 시작한 날) 지금 만든다.
+  var base = props.getProperty('B|' + today);
+  if (base === null) {
+    base = readLog().length - prevNo;
+    write['B|' + today] = String(base);
+    ensureLogRows(sheet(SHEET_LOG), base + prevNo + sum(remain) + 1 + 50);
+  }
   props.setProperties(write);
-  return { rec: rec };
+  return { rec: rec, base: Number(base) };
 }
 
 function claim(deviceKey, pin, settings) {
@@ -179,6 +217,7 @@ function claim(deviceKey, pin, settings) {
  */
 function handleAdmin(req, settings) {
   if (req.action === 'status') return { ok: true, state: 'ready', admin: true };
+  if (req.action === 'stats') return statsOf(req.date || todayStr());
   if (req.action === 'claim') {
     if (!settings.pin || String(req.pin || '') !== settings.pin) return { ok: false, error: 'wrong_pin' };
     return { ok: true, state: 'claimed', admin: true, claimedAt: nowTimeStr() };
@@ -270,8 +309,61 @@ function initDay(today) {
   }
   write['S|' + today] = JSON.stringify(stock.remain);
   write['N|' + today] = String(n);
+  // 다음 참여번호(n+1)가 기록 탭의 다음 빈 줄(log.length+1)에 오도록. 그날 재고만큼 줄을 미리 늘린다.
+  write['B|' + today] = String(log.length - n);
+  ensureLogRows(sheet(SHEET_LOG), log.length + sum(stock.remain) + 50);
   PropertiesService.getScriptProperties().setProperties(write);
   return stock.remain;
+}
+
+/** 오늘 스크립트 속성에 있는 참여 결과 전부 [{device, no, time, rank, c}] (참여번호순) */
+function todayRecords(today) {
+  var props = PropertiesService.getScriptProperties();
+  var prefix = 'D|' + today + '|';
+  var all = props.getProperties ? props.getProperties() : null;
+  var keys = all ? Object.keys(all) : props.getKeys();
+  var list = [];
+  keys.forEach(function (k) {
+    if (k.indexOf(prefix) !== 0) return;
+    var rec = JSON.parse(all ? all[k] : props.getProperty(k));
+    rec.device = k.substring(prefix.length);
+    list.push(rec);
+  });
+  list.sort(function (a, b) { return a.no - b.no; });
+  return list;
+}
+
+/** 서버 속성과 기록 탭을 대조한다(관리자 점검용). */
+function statsOf(today) {
+  var props = PropertiesService.getScriptProperties();
+  var recs = todayRecords(today);
+  var log = readLog();
+  var inSheet = {}, sheetRows = 0, dup = 0;
+  for (var i = 1; i < log.length; i++) {
+    if (cellStr(log[i][COL.date], 'yyyy-MM-dd') !== today) continue;
+    sheetRows++;
+    var no = Number(log[i][COL.no]);
+    if (inSheet[no]) dup++;
+    inSheet[no] = true;
+  }
+  var missing = recs.filter(function (r) { return !inSheet[r.no]; }).map(function (r) { return r.no; });
+  var byRank = [0, 0, 0, 0];
+  recs.forEach(function (r) { byRank[r.rank - 1]++; });
+  var outOfOrder = 0, prev = 0;
+  for (var j = 1; j < log.length; j++) {
+    if (cellStr(log[j][COL.date], 'yyyy-MM-dd') !== today) continue;
+    var n2 = Number(log[j][COL.no]);
+    if (n2 < prev) outOfOrder++;
+    prev = n2;
+  }
+  return {
+    ok: true, date: today,
+    lastNo: Number(props.getProperty('N|' + today) || 0),
+    records: recs.length, byRank: byRank, remain: getRemain(today),
+    sheetRows: sheetRows, sheetDup: dup, sheetOutOfOrder: outOfOrder,
+    missingInSheet: missing.length, missingNos: missing.slice(0, 30),
+    stockTab: (readStock(today) || {}).remain || null
+  };
 }
 
 function rowToRec(row) {
@@ -375,8 +467,51 @@ function cellStr(v, fmt) {
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('룰렛')
     .addItem('재고 탭 숫자를 남은 수량으로 적용 (오늘)', 'menuApplyStock')
+    .addItem('기록 탭 다시 맞추기 (오늘)', 'menuRebuildLog')
     .addItem('오늘 시험 데이터 초기화', 'menuResetToday')
     .addToUi();
+}
+
+function menuRebuildLog() {
+  var ui = SpreadsheetApp.getUi();
+  var today = todayStr();
+  var n = rebuildLog(today);
+  ui.alert(n === null ? '오늘 참여 기록이 아직 없습니다.' : '기록 탭의 오늘 줄을 ' + n + '건으로 다시 썼습니다(참여번호순).');
+}
+
+/**
+ * 기록 탭의 그날 줄을 스크립트 속성(실제 기준)으로 다시 쓴다. 빠진 줄 복구·순서 정리용.
+ * 다른 날 줄은 그대로 위에 두고, 그날 줄은 그 아래에 참여번호 자리대로 쓴다.
+ */
+function rebuildLog(today) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(LOCK_WAIT_MS);
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (!getRemain(today)) return null;
+    var recs = todayRecords(today);
+    var sh = sheet(SHEET_LOG);
+    var log = sh.getDataRange().getValues();
+    var width = 6;
+    var keep = [];
+    for (var i = 1; i < log.length; i++) {
+      if (cellStr(log[i][COL.date], 'yyyy-MM-dd') !== today && String(log[i].join('')) !== '') keep.push(log[i].slice(0, width));
+    }
+    var base = 1 + keep.length; // 참여번호 n → (base + n)번째 줄
+    var maxNo = recs.length ? recs[recs.length - 1].no : 0;
+    var rows = [];
+    for (var n = 1; n <= maxNo; n++) rows.push(['', '', '', '', '', '']);
+    recs.forEach(function (r) { rows[r.no - 1] = [r.no, today, r.time, r.device, r.rank, r.c || '']; });
+    if (log.length > 1) sh.getRange(2, 1, log.length - 1, Math.max(width, log[0].length)).clearContent();
+    var all = keep.concat(rows);
+    ensureLogRows(sh, 1 + all.length + sum(getRemain(today)) + 50);
+    if (all.length) sh.getRange(2, 1, all.length, width).setValues(all);
+    props.setProperty('B|' + today, String(base));
+    SpreadsheetApp.flush();
+    return recs.length;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function menuApplyStock() {
@@ -419,16 +554,22 @@ function resetToday(today) {
   var lock = LockService.getScriptLock();
   lock.waitLock(LOCK_WAIT_MS);
   try {
+    // 그날 속성만 빼고 나머지를 다시 쓴다(한 번에 처리, 다른 날 속성은 유지)
     var props = PropertiesService.getScriptProperties();
-    props.getKeys().forEach(function (k) {
-      if (k === 'S|' + today || k === 'N|' + today || k.indexOf('D|' + today + '|') === 0) props.deleteProperty(k);
+    var all = props.getProperties();
+    var rest = {};
+    Object.keys(all).forEach(function (k) {
+      var isToday = k === 'S|' + today || k === 'N|' + today || k === 'B|' + today || k.indexOf('D|' + today + '|') === 0;
+      if (!isToday) rest[k] = all[k];
     });
+    props.setProperties(rest, true);
+
     var sh = sheet(SHEET_LOG);
     var log = sh.getDataRange().getValues();
     var keep = [], removed = 0;
     for (var i = 1; i < log.length; i++) {
       if (cellStr(log[i][COL.date], 'yyyy-MM-dd') === today) removed++;
-      else keep.push(log[i]);
+      else if (String(log[i].join('')) !== '') keep.push(log[i]); // 빈 줄은 버림
     }
     if (log.length > 1) sh.getRange(2, 1, log.length - 1, log[0].length).clearContent();
     if (keep.length) sh.getRange(2, 1, keep.length, log[0].length).setValues(keep);

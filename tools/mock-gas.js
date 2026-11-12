@@ -18,8 +18,10 @@
   }
   var data = load() || {}; // { 시트이름: [[...], ...] }
 
+  var maxRows = {};
   function Range(name, r, c, nr, nc) {
     this.set = function (vals) {
+      if (r + nr - 1 > (maxRows[name] || 1000)) throw new Error('The coordinates of the range are outside the dimensions of the sheet.');
       var rows = data[name];
       for (var i = 0; i < nr; i++) {
         while (rows.length < r + i) rows.push([]);
@@ -49,6 +51,10 @@
     };
     this.getRange = function (r, c, nr, nc) { return new Range(name, r, c, nr || 1, nc || 1); };
     this.appendRow = function (row) { data[name].push(row.slice()); save(); };
+    // 실제 시트처럼 줄 수 한도를 둔다(새 탭 1000줄). 한도를 넘는 줄에 쓰면 오류.
+    if (!maxRows[name]) maxRows[name] = 1000;
+    this.getMaxRows = function () { return maxRows[name]; };
+    this.insertRowsAfter = function (after, n) { maxRows[name] += n; };
     this.setFrozenRows = function () {};
   }
 
@@ -73,9 +79,14 @@
   var scriptProps = {
     getProperty: function (k) { return Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null; },
     setProperty: function (k, v) { props[k] = String(v); saveProps(); return this; },
-    setProperties: function (o) { for (var k in o) props[k] = String(o[k]); saveProps(); return this; },
+    setProperties: function (o, deleteAllOthers) {
+      if (deleteAllOthers) props = {};
+      for (var k in o) props[k] = String(o[k]);
+      saveProps(); return this;
+    },
     deleteProperty: function (k) { delete props[k]; saveProps(); return this; },
-    getKeys: function () { return Object.keys(props); }
+    getKeys: function () { return Object.keys(props); },
+    getProperties: function () { return Object.assign({}, props); }
   };
   global.PropertiesService = { getScriptProperties: function () { return scriptProps; } };
   // 캐시는 시험에서 설정 변경이 바로 보이게 항상 비어 있는 것으로 둔다
@@ -93,7 +104,8 @@
       }).formatToParts(d).forEach(function (x) { p[x.type] = x.value; });
       return fmt.replace('yyyy', p.year).replace('MM', p.month).replace('dd', p.day)
         .replace('HH', p.hour).replace('mm', p.minute).replace('ss', p.second);
-    }
+    },
+    sleep: function () {}
   };
 
   // Code.gs를 불러온 뒤 호출: 탭 만들기 + 오늘 날짜 재고 줄 추가
@@ -107,7 +119,7 @@
     data['설정'].forEach(function (r) { if (r[0] === '관리자 코드' && !r[1]) r[1] = 'TEST-ADMIN'; });
     save();
   };
-  global.mockReset = function () { data = {}; save(); props = {}; saveProps(); };
+  global.mockReset = function () { data = {}; save(); props = {}; saveProps(); maxRows = {}; };
   global.mockData = function () { return data; };
   global.mockProps = function () { return props; };
   global.mockCall = function (req) {

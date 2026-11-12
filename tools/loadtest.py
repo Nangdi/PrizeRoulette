@@ -1,7 +1,9 @@
 """
 배포한 Apps Script 서버에 동시 요청을 보내 수량이 넘치지 않는지 확인한다.
 
-  python tools/loadtest.py <웹앱 /exec 주소> [총 요청 수=30] [동시 인원=30]
+  python tools/loadtest.py <웹앱 /exec 주소> [총 요청 수=30] [동시 인원=30] [관리자 코드]
+
+관리자 코드를 주면 끝난 뒤 서버 기록(스크립트 속성)과 기록 탭을 대조한 점검 결과도 출력한다.
 
 서로 다른 가짜 기기(기기 키)가 한 번씩 일반 참여한다. 마감(sold_out)이 나오면 거기서 멈춘다.
 총 요청 수를 재고보다 크게 주면 "재고를 다 쓸 때까지" 돌려 등수별 개수가 재고와 같은지 볼 수 있다.
@@ -88,6 +90,19 @@ def main():
           again.get("no") == first_r.get("no") and again.get("rank") == first_r.get("rank"))
     after, _, _ = call(url, {"action": "spin", "deviceKey": f"load-{uuid.uuid4()}"})
     print("끝난 뒤 새 기기:", after.get("state"), after.get("reason", ""))
+
+    if len(sys.argv) > 4:
+        time.sleep(5)  # 잠금 밖 시트 쓰기가 끝나길 잠깐 기다림
+        st, _, _ = call(url, {"action": "stats", "deviceKey": "load-stats-check", "admin": sys.argv[4]})
+        print()
+        print("── 서버·시트 대조 ──")
+        if not st.get("ok") or "records" not in st:
+            print("점검 실패(관리자 코드 확인):", st)
+            return
+        print(f"서버 기록 {st['records']}건 (마지막 참여번호 {st['lastNo']}), 등수별 {st['byRank']}, 남은 수량 {st['remain']}")
+        print(f"기록 탭 오늘 {st['sheetRows']}줄, 빠진 번호 {st['missingInSheet']}건 {st['missingNos']}, "
+              f"중복 {st['sheetDup']}, 순서 어긋남 {st['sheetOutOfOrder']}")
+        print("재고 탭 오늘 줄:", st["stockTab"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>경품 룰렛</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root {
+    --bg: #eef3fa;
+    --card: #ffffff;
+    --ink: #142033;
+    --sub: #5b6b82;
+    --line: #d9e2ee;
+    --brand: #0b4ea2;
+    --brand-dark: #083a79;
+    --r1: #f4b400;
+    --r2: #e5484d;
+    --r3: #2f8fdd;
+    --r4: #1d3f72;
+    --stamp: #d1242f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .wrap { max-width: 460px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { text-align: center; margin: 8px 0 20px; }
+  header .eyebrow { font-size: 13px; font-weight: 600; color: var(--brand); letter-spacing: .02em; }
+  header h1 { margin: 6px 0 0; font-size: 26px; font-weight: 800; }
+  .card { background: var(--card); border-radius: 20px; padding: 24px 20px; box-shadow: 0 6px 24px rgba(20, 32, 51, .08); }
+  .hidden { display: none !important; }
+  .center { text-align: center; }
+  .muted { color: var(--sub); font-size: 14px; line-height: 1.6; }
+
+  /* 룰렛 */
+  .wheel-box { position: relative; width: min(84vw, 340px); aspect-ratio: 1; margin: 4px auto 22px; }
+  .wheel-box svg { width: 100%; height: 100%; display: block; }
+  #wheel { transform-origin: 50% 50%; will-change: transform; }
+  .pointer {
+    position: absolute; left: 50%; top: -6px; transform: translateX(-50%);
+    width: 0; height: 0; border-left: 16px solid transparent; border-right: 16px solid transparent;
+    border-top: 30px solid var(--ink); filter: drop-shadow(0 2px 2px rgba(0,0,0,.25)); z-index: 2;
+  }
+  button {
+    font: inherit; border: 0; cursor: pointer; border-radius: 14px;
+    padding: 16px 20px; font-size: 18px; font-weight: 700; width: 100%;
+  }
+  .btn-primary { background: var(--brand); color: #fff; }
+  .btn-primary:active { background: var(--brand-dark); }
+  .btn-primary:disabled { background: #9db3d1; cursor: default; }
+  .btn-line { background: #fff; color: var(--brand); border: 1.5px solid var(--brand); font-size: 16px; padding: 13px 16px; }
+
+  /* 결과 */
+  .rank { font-size: 64px; font-weight: 900; line-height: 1; margin: 6px 0 10px; }
+  .rank.r1 { color: var(--r1); } .rank.r2 { color: var(--r2); } .rank.r3 { color: var(--r3); } .rank.r4 { color: var(--r4); }
+  .congrats { font-size: 16px; font-weight: 600; color: var(--sub); }
+  .prize { font-size: 20px; font-weight: 700; margin: 4px 0 18px; word-break: keep-all; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; text-align: left;
+          background: #f5f8fc; border-radius: 12px; padding: 14px 16px; font-size: 15px; }
+  .meta dt { color: var(--sub); }
+  .meta dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .live { display: inline-flex; align-items: center; gap: 6px; }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #1fa65a; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  .again { display: inline-block; margin-bottom: 10px; padding: 4px 10px; border-radius: 99px;
+           background: #fff4d6; color: #8a5a00; font-size: 13px; font-weight: 700; }
+  .notice { margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: #eaf2ff; color: var(--brand-dark);
+            font-size: 15px; font-weight: 600; line-height: 1.5; word-break: keep-all; }
+  .result-top { position: relative; }
+  .stamp {
+    display: inline-block; margin-top: 22px; transform: rotate(-8deg);
+    border: 4px solid var(--stamp); color: var(--stamp); border-radius: 12px; padding: 8px 22px;
+    font-weight: 900; font-size: 26px; line-height: 1.15; text-align: center;
+  }
+  .stamp small { display: block; font-size: 13px; font-weight: 700; }
+  .claim { margin-top: 18px; border-top: 1px dashed var(--line); padding-top: 18px; }
+  .pin-row { display: flex; gap: 8px; margin-top: 10px; }
+  .pin-row input {
+    flex: 1; min-width: 0; font: inherit; font-size: 20px; text-align: center; letter-spacing: .3em;
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 12px;
+  }
+  .pin-row button { width: auto; padding: 12px 20px; font-size: 16px; }
+  .err { color: var(--stamp); font-size: 14px; margin-top: 8px; min-height: 1em; }
+
+  .closed-icon { font-size: 48px; margin-bottom: 8px; }
+  .spinner { width: 36px; height: 36px; border-radius: 50%; border: 4px solid var(--line); border-top-color: var(--brand);
+             animation: spin 0.9s linear infinite; margin: 24px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
+  .pop { animation: pop .35s ease-out; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">국립과천과학관 과학탐구관 · 전기와 자기 Zone</div>
+    <h1>개관 기념 경품 룰렛</h1>
+  </header>
+
+  <!-- 불러오는 중 -->
+  <section id="v-loading" class="card center"><div class="spinner"></div><div class="muted">불러오는 중…</div></section>
+
+  <!-- 룰렛 -->
+  <section id="v-wheel" class="card center hidden">
+    <div class="wheel-box">
+      <div class="pointer"></div>
+      <svg viewBox="-110 -110 220 220" aria-hidden="true"><g id="wheel"></g>
+        <circle r="16" fill="#fff" stroke="#142033" stroke-width="3"/></svg>
+    </div>
+    <button id="btn-spin" class="btn-primary">룰렛 돌리기</button>
+    <p class="muted" style="margin:12px 0 0">1인 1회 참여할 수 있어요.</p>
+  </section>
+
+  <!-- 결과 -->
+  <section id="v-result" class="card center hidden">
+    <div class="result-top">
+      <div id="r-again" class="again hidden"></div>
+      <div class="congrats">축하합니다!</div>
+      <div id="r-rank" class="rank"></div>
+      <div id="r-prize" class="prize"></div>
+    </div>
+    <dl class="meta">
+      <dt>참여번호</dt><dd id="r-no"></dd>
+      <dt>참여 시각</dt><dd id="r-time"></dd>
+      <dt>현재 시각</dt><dd><span id="r-clock" class="live"></span></dd>
+    </dl>
+    <div id="r-stamp" class="stamp hidden">수령 완료<small id="r-stamp-time"></small></div>
+    <p id="r-notice" class="notice">이 화면을 끄지 말고 부스 스태프에게 보여 주세요.<br>캡처 화면으로는 받을 수 없어요.</p>
+
+    <div id="claim" class="claim">
+      <button id="btn-claim-open" class="btn-line">스태프 수령 확인</button>
+      <div id="claim-form" class="hidden">
+        <div class="muted">스태프가 PIN을 입력해 주세요.</div>
+        <div class="pin-row">
+          <input id="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="PIN">
+          <button id="btn-claim" class="btn-primary">확인</button>
+        </div>
+        <div id="claim-err" class="err"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 마감 / 오류 -->
+  <section id="v-message" class="card center hidden">
+    <div id="m-icon" class="closed-icon"></div>
+    <h2 id="m-title" style="margin:0 0 8px;font-size:20px"></h2>
+    <p id="m-body" class="muted" style="margin:0;word-break:keep-all"></p>
+    <button id="btn-retry" class="btn-primary hidden" style="margin-top:18px">다시 시도</button>
+  </section>
+</div>
+
+<script>
+/* ───────── 설정 ─────────
+ * API_URL: Apps Script 웹 앱 배포 주소(…/exec). README의 "서버 배포" 참고.
+ * 테스트할 때는 index.html?mock=1 로 열면 서버 없이 브라우저 안에서 Code.gs를 그대로 돌린다.
+ */
+const API_URL = 'https://script.google.com/macros/s/AKfycbzj3RjL_lX9y2_ks2lm6_YEXROYQ0V4hb48Z7TlR9dXllSCJwsjn74dBZpo0bi7ZvA5/exec';
+
+const SEGMENTS = [1, 4, 3, 4, 2, 4, 3, 4]; // 시계 방향, 맨 위부터. 결과 등수 칸 중 하나에 멈춘다.
+const RANK_COLOR = { 1: '#f4b400', 2: '#e5484d', 3: '#2f8fdd', 4: '#1d3f72' };
+const BUSY_RETRY = 4;
+
+const params = new URLSearchParams(location.search);
+const MOCK = params.has('mock');
+const $ = (id) => document.getElementById(id);
+
+/* ───────── 기기 키 ─────────
+ * 이 브라우저에 한 번 만들어 저장한다. 서버는 "오늘 + 기기 키"로 참여 여부를 확인한다.
+ * 저장이 막힌 브라우저(일부 시크릿 창)에서는 매번 새 키가 된다.
+ */
+function deviceKey() {
+  const K = 'prizeRoulette.deviceKey';
+  try {
+    let k = localStorage.getItem(K);
+    if (!k) { k = newKey(); localStorage.setItem(K, k); }
+    return k;
+  } catch (e) {
+    return window.__memKey || (window.__memKey = newKey());
+  }
+}
+function newKey() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+/* ───────── 서버 호출 ───────── */
+let mockReady = null;
+async function call(req) {
+  req.deviceKey = deviceKey();
+  for (let i = 0; ; i++) {
+    let res;
+    if (MOCK) {
+      await (mockReady ||= loadMock());
+      await sleep(250 + Math.random() * 300);
+      res = window.mockCall(req);
+    } else {
+      if (!API_URL) throw new Error('API_URL이 설정되지 않았습니다.');
+      const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify(req) }); // text/plain → 사전 요청 없음
+      res = await r.json();
+    }
+    if (res.error === 'busy' && i < BUSY_RETRY) { await sleep(1200 + Math.random() * 800); continue; }
+    return res;
+  }
+}
+async function loadMock() {
+  await new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = 'tools/mock-gas.js'; s.onload = ok; s.onerror = fail; document.head.appendChild(s);
+  });
+  const code = await (await fetch('apps-script/Code.gs')).text();
+  (0, eval)(code);
+  if (params.has('reset')) window.mockReset();
+  const stock = params.get('stock'); // 예: ?mock=1&stock=0,0,0,1
+  window.mockInit(stock ? stock.split(',').map(Number) : undefined);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ───────── 화면 전환 ───────── */
+function show(id) {
+  for (const v of ['v-loading', 'v-wheel', 'v-result', 'v-message']) $(v).classList.toggle('hidden', v !== id);
+}
+function showMessage(icon, title, body, retry) {
+  $('m-icon').textContent = icon; $('m-title').textContent = title; $('m-body').textContent = body;
+  $('btn-retry').classList.toggle('hidden', !retry);
+  show('v-message');
+}
+function showClosed(reason) {
+  if (reason === 'sold_out') showMessage('🎁', '오늘 이벤트가 마감되었어요', '준비한 경품이 모두 소진되었습니다. 참여해 주셔서 감사합니다.');
+  else showMessage('📅', '이벤트 운영일이 아니에요', '운영일에 부스에서 QR을 찍어 참여해 주세요.');
+}
+function showError() {
+  showMessage('📶', '연결이 원활하지 않아요', '잠시 후 다시 시도해 주세요. 이미 돌린 결과는 그대로 남아 있어요.', true);
+}
+
+/* ───────── 결과 화면 ───────── */
+let currentFresh = true; // 방금 돌린 결과인지(false면 "다시 보기" 표시)
+let clockTimer = 0;
+function showResult(r, fresh) {
+  currentFresh = fresh;
+  $('r-rank').textContent = r.rank + '등';
+  $('r-rank').className = 'rank r' + r.rank;
+  $('r-prize').textContent = r.prize;
+  $('r-no').textContent = '#' + String(r.no).padStart(4, '0');
+  $('r-time').textContent = r.date + ' ' + r.time;
+  $('r-again').textContent = '다시 보기 · 최초 참여 ' + r.time;
+  $('r-again').classList.toggle('hidden', fresh);
+
+  const claimed = !!r.claimedAt;
+  $('r-stamp').classList.toggle('hidden', !claimed);
+  $('r-stamp-time').textContent = r.claimedAt || '';
+  $('claim').classList.toggle('hidden', claimed);
+  $('r-notice').classList.toggle('hidden', claimed);
+
+  tickClock();
+  clearInterval(clockTimer);
+  clockTimer = setInterval(tickClock, 1000);
+  show('v-result');
+  $('v-result').classList.remove('pop'); void $('v-result').offsetWidth; $('v-result').classList.add('pop');
+}
+function tickClock() {
+  $('r-clock').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false, timeZone: 'Asia/Seoul' });
+}
+
+$('btn-claim-open').onclick = () => {
+  $('btn-claim-open').classList.add('hidden');
+  $('claim-form').classList.remove('hidden');
+  $('pin').focus();
+};
+$('btn-claim').onclick = async () => {
+  const pin = $('pin').value.trim();
+  if (!pin) return;
+  $('btn-claim').disabled = true; $('claim-err').textContent = '';
+  try {
+    const r = await call({ action: 'claim', pin });
+    if (r.ok && r.state === 'result') { $('pin').value = ''; showResult(r, currentFresh); }
+    else $('claim-err').textContent = r.error === 'wrong_pin' ? 'PIN이 맞지 않습니다.' : '처리하지 못했어요. 다시 시도해 주세요.';
+  } catch (e) {
+    $('claim-err').textContent = '연결이 원활하지 않아요. 다시 시도해 주세요.';
+  }
+  $('btn-claim').disabled = false;
+};
+$('pin').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-claim').click(); });
+
+/* ───────── 룰렛 ───────── */
+function drawWheel() {
+  const g = $('wheel');
+  const n = SEGMENTS.length, step = 360 / n, R = 104;
+  let html = '<circle r="108" fill="#142033"/>';
+  SEGMENTS.forEach((rank, i) => {
+    const a0 = (i - 0.5) * step, a1 = (i + 0.5) * step;
+    const p = (a) => [R * Math.sin(a * Math.PI / 180), -R * Math.cos(a * Math.PI / 180)];
+    const [x0, y0] = p(a0), [x1, y1] = p(a1);
+    html += `<path d="M0 0 L${x0} ${y0} A${R} ${R} 0 0 1 ${x1} ${y1} Z" fill="${RANK_COLOR[rank]}" stroke="#fff" stroke-width="2"/>`;
+    html += `<text transform="rotate(${i * step}) translate(0 -68)" text-anchor="middle" dominant-baseline="middle"
+      font-size="20" font-weight="800" fill="${rank === 1 ? '#142033' : '#fff'}">${rank}등</text>`;
+  });
+  g.innerHTML = html;
+}
+
+let angle = 0;
+function setAngle(a) { angle = a; $('wheel').setAttribute('transform', `rotate(${a})`); }
+
+// 결과가 오기 전까지 일정 속도로 돌리고, 결과가 오면 그 등수 칸에 감속해서 멈춘다.
+function spinUntil(resultPromise) {
+  return new Promise((resolve, reject) => {
+    const SPEED = 600;      // 도/초 (대기 중)
+    const DECEL_MS = 4200;  // 감속 시간
+    let last = performance.now(), speed = 0, result = null, stop = null;
+
+    resultPromise.then((r) => { result = r; }, reject);
+
+    function frame(now) {
+      const dt = (now - last) / 1000; last = now;
+      if (!stop) {
+        speed = Math.min(SPEED, speed + SPEED * dt * 2);
+        setAngle(angle + speed * dt);
+        if (result && speed >= SPEED * 0.9) {
+          if (result.state !== 'result') { resolve(result); return; }
+          stop = planStop(result.rank, speed, DECEL_MS, now);
+        }
+      } else {
+        const t = Math.min(1, (now - stop.t0) / DECEL_MS);
+        setAngle(stop.from + stop.dist * (1 - Math.pow(1 - t, 3)));
+        if (t >= 1) { resolve(result); return; }
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  });
+}
+function planStop(rank, speed, decelMs, now) {
+  const step = 360 / SEGMENTS.length;
+  const idx = SEGMENTS.map((r, i) => (r === rank ? i : -1)).filter((i) => i >= 0);
+  const i = idx[Math.floor(Math.random() * idx.length)];
+  const jitter = (Math.random() - 0.5) * step * 0.6;
+  const target = ((360 - i * step + jitter) % 360 + 360) % 360; // 이 각도일 때 i번 칸이 맨 위
+  const minDist = speed * (decelMs / 1000) / 3;                 // 감속 시작 속도가 지금 속도와 비슷하게
+  const from = angle;
+  let dist = target - (((from % 360) + 360) % 360);
+  while (dist < minDist) dist += 360;
+  return { from, dist, t0: now };
+}
+
+$('btn-spin').onclick = async () => {
+  $('btn-spin').disabled = true;
+  try {
+    const r = await spinUntil(call({ action: 'spin' }));
+    if (r.ok && r.state === 'result') { await sleep(400); showResult(r, !r.again); }
+    else if (r.ok && r.state === 'closed') showClosed(r.reason);
+    else showError();
+  } catch (e) {
+    console.error(e); showError();
+  }
+  $('btn-spin').disabled = false;
+};
+
+/* ───────── 시작 ───────── */
+async function start() {
+  show('v-loading');
+  try {
+    const r = await call({ action: 'status' });
+    if (!r.ok) return showError();
+    if (r.state === 'result') return showResult(r, false);
+    if (r.state === 'closed') return showClosed(r.reason);
+    setAngle(0);
+    show('v-wheel');
+  } catch (e) {
+    console.error(e); showError();
+  }
+}
+$('btn-retry').onclick = start;
+drawWheel();
+start();
+</script>
+</body>
+</html>
